@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pyodide MRI Signal Calculator</title>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 1rem; }
+    input, select { margin: 0.5rem; padding: 0.5rem; width: 100px; }
+    button { padding: 0.5rem 1.2rem; margin: 1rem 0; }
+    #output { margin-top: 1rem; font-weight: bold; color: green; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>🧪 MRI Signal Finder</h2>
+  <label>T1blood: <input type="number" id="T1blood" value="260" /></label>
+  <label>T2prep: <input type="number" id="t22" value="40" /></label>
+  <label>HR: <input type="number" id="HR" value="85" /></label>
+  <label>n: <input type="number" id="n" value="24" /></label>
+  <label>Readout:
+    <select id="readout">
+      <option value="bSSFP">bSSFP</option>
+      <option value="GRE">GRE/SPGR</option>
+    </select>
+  </label>
+  <br />
+  <button onclick="runCalculation()">Run Calculation</button>
+  <div id="output">Waiting for input...</div>
+
+  <script>
+    let pyodideReady = null;
+
+    async function runCalculation() {
+      const output = document.getElementById("output");
+      output.textContent = "⏳ Loading Pyodide and NumPy...";
+      if (!pyodideReady) {
+        pyodideReady = await loadPyodide();
+        await pyodideReady.loadPackage("numpy");
+      }
+
+      const T1blood = parseFloat(document.getElementById("T1blood").value);
+      const t22 = parseFloat(document.getElementById("t22").value);
+      const HR = parseFloat(document.getElementById("HR").value);
+      const n = parseInt(document.getElementById("n").value);
+      const readout = document.getElementById("readout").value;
+
+      const pythonCode = `
+import numpy as np
+
+def signal_GRE(T1, T2, t1, t22, HR, n):
+    TR = 5.8
+    alpha1 = 20 / 360 * 2 * np.pi
+    alpha2 = 10 / 360 * 2 * np.pi
+    alphaNav = 3 / 360 * 2 * np.pi
+    nNav = 14
+    TRNav = TR
+    RR = 60000 / HR
+    dt1 = t1 - nNav * TRNav
+    dt22 = t22
+    RX1 = RR - dt1 - n * TR - nNav * TRNav
+    RX2 = RR - n * TR - nNav * TRNav - dt22
+
+    M0 = 1
+    Mstart = M0
+
+    for _ in range(5):
+        # Inversion Recovery
+        Mir = -Mstart * np.exp(-dt1 / T1) + (1 - np.exp(-dt1 / T1))
+
+        # Navigator 1
+        E1_TR = np.exp(-TR / T1)
+        E1_nNavTR = np.exp(-nNav * TR / T1)
+        cos_alphaNav = np.cos(alphaNav)
+        Mnav1 = (Mir * (cos_alphaNav ** nNav) * E1_nNavTR +
+                 (1 - (cos_alphaNav ** nNav) * E1_nNavTR) *
+                 (1 - E1_TR) / (1 - cos_alphaNav * E1_TR))
+
+        # Acquisition 1
+        cos_alpha1 = np.cos(alpha1)
+        E1_nTR = np.exp(-n * TR / T1)
+        S1 = Mnav1
+        Macq1 = (Mnav1 * (cos_alpha1 ** n) * E1_nTR +
+                 (1 - (cos_alpha1 ** n) * E1_nTR) *
+                 (1 - E1_TR) / (1 - cos_alpha1 * E1_TR))
+
+        # Recovery
+        Mrec = Macq1 * np.exp(-RX2 / T1) + (1 - np.exp(-RX2 / T1))
+
+        # T2prep
+        Mt2p = Mrec * np.exp(-t22 / T2)
+
+        # Navigator 2
+        Mnav2 = (Mt2p * (cos_alphaNav ** nNav) * E1_nNavTR +
+                 (1 - (cos_alphaNav ** nNav) * E1_nNavTR) *
+                 (1 - E1_TR) / (1 - cos_alphaNav * E1_TR))
+
+        # Acquisition 2
+        cos_alpha2 = np.cos(alpha2)
+        S2 = Mnav2
+        Macq2 = (Mnav2 * (cos_alpha2 ** n) * E1_nTR +
+                 (1 - (cos_alpha2 ** n) * E1_nTR) *
+                 (1 - E1_TR) / (1 - cos_alpha2 * E1_TR))
+
+        # Recovery for next shot
+        Mstart = Macq2 * np.exp(-RX1 / T1) + (1 - np.exp(-RX1 / T1))
+
+    return S1, S2
+
+def bSSFP(iFAs, iTR, iTFEFactor, iT1, iT2, iMzInit=1.0, ioffFre=0.0):
+    PHI = np.pi + 2 * np.pi * ioffFre * iTR / 1000
+    E_1 = np.exp(-iTR / iT1)
+    E_2 = np.exp(-iTR / iT2)
+    M_0 = np.array([0.0, 0.0, iMzInit])
+    M_eq = np.array([0.0, 0.0, 1.0])
+    P = np.array([
+        [E_2 * np.cos(PHI), E_2 * np.sin(PHI), 0],
+        [-E_2 * np.sin(PHI), E_2 * np.cos(PHI), 0],
+        [0, 0, E_1]
+    ])
+    M_r_0negative = M_0.copy()
+    MxyzArr = np.zeros((3, iTFEFactor))
+    for i in range(iTFEFactor):
+        ALPHA = iFAs[i]
+        R_x_alpha = np.array([
+            [1, 0, 0],
+            [0, np.cos(ALPHA), np.sin(ALPHA)],
+            [0, -np.sin(ALPHA), np.cos(ALPHA)]
+        ])
+        M_r_0positive = R_x_alpha @ M_r_0negative
+        M_r_0negative = P @ M_r_0positive + (1 - E_1) * M_eq
+        MxyzArr[0, i] = M_r_0positive[0] * E_2 * np.cos(PHI) + M_r_0positive[1] * E_2 * np.sin(PHI)
+        MxyzArr[1, i] = -M_r_0positive[0] * E_2 * np.sin(PHI) + M_r_0positive[1] * E_2 * np.cos(PHI)
+        MxyzArr[2, i] = M_r_0positive[2] * E_1 + (1 - E_1) * M_eq[2]
+    return MxyzArr
+
+def signal_bSSFP(T1, T2, t1, t22, HR, n):
+    TR = 3.33
+    alpha = 90 / 360 * 2 * np.pi
+    nNav = 14
+    TRNav = TR
+    alphaNav = np.array([3.2, 9.6, 16.1, 22.5, 28.9, 35.4, 41.8, 48.2, 54.6, 61.1, 67.5, 73.9, 80.4, 86.8]) / 360 * 2 * np.pi
+    RR = 60000 / HR
+    dt1 = t1 - nNav * TRNav
+    RX1 = RR - dt1 - n * TR - nNav * TRNav
+    RX2 = RR - n * TR - nNav * TRNav - t22
+    Mstart = 1.0
+    for _ in range(5):
+        Mir = - Mstart * np.exp(-dt1 / T1) + (1 - np.exp(-dt1 / T1))
+        seq = np.concatenate((alphaNav, np.full(n, alpha)))
+        oMxyz = bSSFP(seq, TR, nNav + n, T1, T2, Mir, 0)
+        Mxy = np.abs(oMxyz[0] + 1j * oMxyz[1])
+        Mz = oMxyz[2]
+        S1 = np.sign(Mz[nNav]) * Mxy[nNav]
+        Macq1 = Mz[nNav]
+        Mrec = Macq1 * np.exp(-RX2 / T1) + (1 - np.exp(-RX2 / T1))
+        Mt2p = Mrec * np.exp(-t22 / T2)
+        oMxyz = bSSFP(seq, TR, nNav + n, T1, T2, Mt2p, 0)
+        Mxy = np.abs(oMxyz[0] + 1j * oMxyz[1])
+        Mz = oMxyz[2]
+        S2 = np.sign(Mz[nNav]) * Mxy[nNav]
+        Macq2 = Mz[nNav]
+        Mstart = Macq2 * np.exp(-RX1 / T1) + (1 - np.exp(-RX1 / T1))
+    return S1, S2
+
+T2blood = 140
+result_t1 = None
+for t1 in range(100, 300, 1):
+    if "${readout}" == "GRE":
+        S1, S2 = signal_GRE(${T1blood}, T2blood, t1, ${t22}, ${HR}, ${n})
+    else:
+        S1, S2 = signal_bSSFP(${T1blood}, T2blood, t1, ${t22}, ${HR}, ${n})
+    if S1 > 0:
+        result_t1 = t1
+        break
+result_t1
+      `;
+
+      try {
+        const result = await pyodideReady.runPythonAsync(pythonCode);
+        output.textContent = result !== null
+          ? `✅ First t1 where S1 > 0: ${result} ms`
+          : `❌ No positive signal found.`;
+      } catch (err) {
+        output.textContent = "⚠️ Error: " + err;
+      }
+    }
+  </script>
+</body>
+</html>
