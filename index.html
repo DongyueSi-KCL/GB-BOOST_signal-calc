@@ -6,7 +6,7 @@
   <title>Pyodide MRI Signal Calculator</title>
   <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
   <style>
-    body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 1rem; }
+    body { font-family: Helvetica; max-width: 700px; margin: 2rem auto; padding: 1rem; }
     input, select { margin: 0.5rem; padding: 0.5rem; width: 100px; }
     button { padding: 0.5rem 1.2rem; margin: 1rem 0; }
     #output { margin-top: 1rem; font-weight: bold; color: green; white-space: pre-wrap; }
@@ -15,9 +15,10 @@
 <body>
   <h2>🧪 MRI Signal Finder</h2>
    <p>User input parameters</p>
-  <label>T1blood: <input type="number" id="T1blood" value="260" /></label>
-  <label>HR: <input type="number" id="HR" value="85" /></label>
+  <label>T1blood (ms): <input type="number" id="T1blood" value="260" /></label>
+  <label>HR (bpm): <input type="number" id="HR" value="85" /></label>
   <label>n: <input type="number" id="n" value="24" /></label>
+  <br />
   <label>Readout:
     <select id="readout" onchange="updateDefaults()">
       <option value="bSSFP">bSSFP</option>
@@ -25,10 +26,9 @@
     </select>
   </label>
   <p>Default parameters</p>
+  <label>TR (ms): <input type="number" id="TR" value="3.33" step="0.01" /></label> 
   <br />
-  <label>TR (ms): <input type="number" id="TR" value="3.33" step="0.01" /></label>
-  <br />
-  <label>T2prep (t22): <input type="number" id="t22" value="40" disabled /></label>
+  <label>T2prep: <input type="number" id="t22" value="40" disabled /></label> <p>ms<p>
   <br />
   <button onclick="runCalculation()">Run Calculation</button>
   <div id="output">Waiting for input...</div>
